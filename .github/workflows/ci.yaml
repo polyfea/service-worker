@@ -1,0 +1,51 @@
+name: Build and Publish Package
+
+on: 
+    push:
+        branches: [ "main"]
+    pull_request:
+        branches: [ "main" ]
+    release:
+        types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 21
+      - run: npm ci
+      - run: npm run build 
+      # TODO: - run: npm test
+  publish_package:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+        contents: write
+        pull-requests: write
+        repository-projects: write
+        packages: write
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 21
+          registry-url: https://npm.pkg.github.com/
+      - run: npm ci
+      - run: npm run build      
+      - id: semver
+        uses: ildug/get-tag-action@v1
+      - run: npm version --git-tag-version=false ${{ steps.semver.outputs.version }} 
+      - uses: JS-DevTools/npm-publish@v3
+        with:
+            token: ${{ secrets.GITHUB_TOKEN }}
+            registry: "https://npm.pkg.github.com"
+            access: "public"
+      - uses: JS-DevTools/npm-publish@v3
+        with:
+            token: ${{ secrets.NPM_PUBLISH_TOKEN }}
+            access: "public"
+      

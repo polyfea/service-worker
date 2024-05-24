@@ -4,7 +4,14 @@ Implements configurable service worker with regular reconcilation of the caching
 
 ## Intended usage
 
-This package provides two module scripts in  `dist/register.mjs` and `dist/sw.mjs`. Both are intended to be served by the server at the intended scope (base url) and loaded into html page and service worker.
+After installing with
+
+```sh
+npm install @polyfe/service-worker
+```
+
+this package provides two module scripts in  `node_modules/@polyfe/service-worker/dist/register.mjs` and `node_modules/@polyfe/service-worker/dist/sw.mjs`. 
+Both are intended to be served by the server at the intended scope (base url) and loaded into html page and service worker.
 
 Example:
 
@@ -27,9 +34,9 @@ Example:
 </body>
 ```
 
-**Important: sw.mjs must be served on the path that defines is scope, which typically means the base url. In the example above it shall be served from the path `/pwa-scope/sw.mjs`**
+**Important: sw.mjs must be served on the path that defines its scope, which typically means the base url. In the example above it shall be served from the path `/pwa-scope/sw.mjs`**
 
-The precaching and runtime caching strategies are loaded and regularly reconciled from the `./polyfea-caching.json` configuration object which implements [Caching](./doc/interfaces/Caching.md). The actual patch to the configuration file and reconcilation period may be defined by metatags as depicted in the example above.
+The precaching and runtime caching strategies are loaded and regularly reconciled from the `./polyfea-caching.json` configuration object which implements [Caching](./docs/interfaces/Caching.md). The actual patch to the configuration file and reconcilation period may be defined by metatags as depicted in the example above.
 
 Example of the configuration file:
 
@@ -50,7 +57,7 @@ Example of the configuration file:
 
 ## Documentation
 
-The package may be also bundled into existing project. See [Reference Documentation](./docs/README.md) for more informations.
+The package may be also bundled into existing project. See [Reference Documentation](./docs/globals.md) for more informations.
 
 ## Development
 
