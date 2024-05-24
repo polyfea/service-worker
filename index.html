@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Home</title>
+    <link rel="manifest" href="manifest.json">
+    <script type="module" src="src/register.ts"></script>
+    <meta name="polyfea-caching-config" content="./test-data/polyfea-caching.json">
+
+</head>
+<body>
+    <h3>Service worker testing</h3>
+    <div class="container">
+        <input type="text" id="input" placeholder="Enter file to fetch" value="/index.html"/>
+        <button id="fetch" onclick="fetchFile()">Fetch</button>
+    </div>
+    <script>
+        
+        function fetchFile() {
+            const input = document.getElementById('input').value;
+            fetch(input)
+                .catch(error => console.error(error));
+        }
+    </script>
+</body>
+</html>

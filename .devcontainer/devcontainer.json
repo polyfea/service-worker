@@ -1,0 +1,24 @@
+{
+    "name": "Polyfea Service Worker",
+    "image": "node",
+    
+    "features": {
+        "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {},
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+
+    },
+
+    "customizations": {
+		"vscode": {
+        "settings": {
+            "terminal.integrated.shell.linux": "pwsh"
+    },
+    "extensions": [
+        "dbaeumer.vscode-eslint"
+    ]
+}
+    },
+
+    "forwardPorts": [7185],    
+    "runArgs": ["--privileged"] // This is required to run minikube
+}

@@ -1,0 +1,11 @@
+{
+    "precache": [
+        { "url": "/index.html", "revision": "1" }
+    ],
+    "routes": [
+        { "pattern": "/@vite/.*", "strategy": "network-only" },
+        { "pattern": "/test-data/.*", "strategy": "cache-only" },
+        { "pattern": ".*", "strategy": "cache-first" }
+    ]
+
+}

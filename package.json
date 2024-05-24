@@ -1,0 +1,55 @@
+{
+  "name": "@polyfea/service-worker",
+  "version": "0.0.1",
+  "description": "Service worker for Polyfea",
+  "main": "dist/sw.mjs",
+  "module": "dist/sw.mjs",
+  "types": "./dist/types/index.d.ts",
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build.sw": "vite build --mode production --config vite.config.sw.ts",
+    "build.register": "vite build --mode production --config vite.config.register.ts",
+    "build": "run-s build.sw build.register",
+    "start.sw": "vite build --watch --mode development --config vite.config.sw.ts",
+    "start.register": "vite --port 3000 --mode development --config vite.config.register.ts",
+    "start": "run-p start.sw start.register",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "typedoc": "npx typedoc --plugin typedoc-plugin-markdown --gitRevision main src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/polyfea/service-worker.git"
+  },
+  "keywords": [
+    "polyfea",
+    "service-worker",
+    "microfrontend"
+  ],
+  "author": "Polyfea Team",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/polyfea/service-worker/issues"
+  },
+  "homepage": "https://github.com/polyfea/service-worker#readme",
+  "devDependencies": {
+    "eslint": "^9.3.0",
+    "http-server": "^14.1.1",
+    "npm-run-all": "^4.1.5",
+    "tsc": "^2.0.4",
+    "typedoc": "^0.25.13",
+    "typedoc-plugin-markdown": "^4.0.2",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "vite-plugin-dts": "^3.9.1",
+    "vite-plugin-environment": "^1.1.3",
+    "workbox-cli": "^7.1.0"
+  },
+  "dependencies": {
+    "pino": "^9.1.0",
+    "workbox-background-sync": "^7.1.0",
+    "workbox-precaching": "^7.1.0",
+    "workbox-window": "^7.1.0"
+  }
+}

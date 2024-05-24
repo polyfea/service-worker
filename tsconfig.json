@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "rootDir": "src",
+    "composite": true,
+    "module": "es2020",
+    "moduleResolution": "Node",
+
+    "outDir": "dist",
+    "lib": ["ES2020", "webworker", "DOM"],
+    
+    "strict": true,
+    "sourceMap": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "skipLibCheck": true
+  },
+  "include": ["./src/**/*.?ts", "./src/**/*.ts"],
+  "exclude": ["node_modules"]
+}
