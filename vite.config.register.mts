@@ -1,18 +1,24 @@
 // vite.config.js
 import { defineConfig } from 'vite'
 import EnvironmentPlugin from 'vite-plugin-environment'
-import dts from "vite-plugin-dts";
 
-export default defineConfig({
+export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
+
+
+    return {
     plugins: [
         EnvironmentPlugin({
-            NODE_ENV: 'development',
-            DEBUG: 'false',
+            NODE_ENV: mode,
         }),
-        dts({ insertTypesEntry: true}),
     ],
 
     publicDir: 'dist',
+
+    server: {
+        watch: {
+            usePolling: true
+        }
+    },
 
     build: {
         outDir: 'dist',
@@ -20,10 +26,10 @@ export default defineConfig({
         sourcemap: true,
 
         lib: {
-            entry: 'src/sw.ts',
+            entry: 'src/register.ts',
             name: 'PolyfeaServiceWorker',
-            fileName: 'sw'
+            fileName: 'register'
         },
-        
     }
+};
 })

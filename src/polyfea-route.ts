@@ -8,13 +8,18 @@ import {BackgroundSyncPlugin} from 'workbox-background-sync';
 
 
 /**
- * Options for defining a Polyfea route.
+ * Options for defining a Polyfea route. One of prefix, pattern, or destination must be specified.
  */
 export interface PolyfeaRouteOptions {
+
+    /**
+     * prefix to meatch route. either relative to base url or absolute path
+     */
+    prefix?: string;
     /**
      * Regular expression to match the route.
      */
-    pattern: string;
+    pattern?: string;
 
     /**
      * If specified, the route will only match requests with the specified destination matching the value.
@@ -79,7 +84,23 @@ export class PolyfeaRoute extends RegExpRoute {
      * @param route - The Polyfea route options.
      */
     constructor(route: PolyfeaRouteOptions) {
-        const pattern = new RegExp(route.pattern);
+
+        const pattern = new RegExp(route.pattern || '.*');
+
+        let prefix = route.prefix || '';
+        if (prefix) {
+            let basePath = decodeURIComponent(
+                new URL(globalThis.location.href).
+                    searchParams.
+                    get('base-path') || '');
+            if (!basePath) { 
+                basePath = new URL(globalThis.location.href).pathname.
+                    split('/').slice(0, -1).join('/') 
+            }
+            // create normalized absolute path
+            prefix = new URL(prefix, `http://host${basePath}/`).pathname;
+        }
+
         let handler: any;
 
         const plugins: WorkboxPlugin[] = [];
@@ -129,9 +150,14 @@ export class PolyfeaRoute extends RegExpRoute {
          * @returns True if the route matches the options, false otherwise.
          */
         this.match = (options: RouteMatchCallbackOptions) => {
-            if (route.destination) {
-                return options.request.destination === route.destination && regexpMatch(options);
+
+            if (route.destination && options.request.destination !== route.destination) {
+                return false;
             }
+            if (route.prefix && !options.url.pathname.startsWith(route.prefix)) {
+                return false;
+            }
+            
             return regexpMatch(options);
         };
     }

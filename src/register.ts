@@ -9,8 +9,9 @@ import { Workbox } from 'workbox-window';
  */
 export function registerServiceWorker(cachingConfigPath: string = "", configReconcileIntervalSeconds: number = 0) {
     if ('serviceWorker' in navigator) {
-        const swUrl = new URL('./sw.mjs');
-        if (!cachingConfigPath === undefined) {
+
+        const swUrl = new URL('./sw.mjs', document.baseURI);
+        if (!cachingConfigPath) {
             cachingConfigPath = document.querySelector('meta[name="polyfea-sw-caching-config"]')?.getAttribute('content') || "";
         }
         if (cachingConfigPath) {
@@ -25,7 +26,9 @@ export function registerServiceWorker(cachingConfigPath: string = "", configReco
             swUrl.searchParams.set('reconcile-interval', configReconcileIntervalSeconds.toString());
         }
 
-        const wb = new Workbox(swUrl.href);
+        swUrl.searchParams.set('base-path', new URL(document.baseURI).pathname);
+
+        const wb = new Workbox(swUrl.pathname + swUrl.search);
 
         wb.register();
     }

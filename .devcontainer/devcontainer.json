@@ -1,24 +1,25 @@
 {
     "name": "Polyfea Service Worker",
     "image": "node",
-    
     "features": {
-        "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {},
-        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
-
+        "ghcr.io/devcontainers/features/powershell:latest": {
+            "version": "latest"
+        },
     },
-
     "customizations": {
-		"vscode": {
-        "settings": {
-            "terminal.integrated.shell.linux": "pwsh"
+        "vscode": {
+            "extensions": [
+                "dbaeumer.vscode-eslint",
+                "DavidAnson.vscode-markdownlint",
+                "bierner.markdown-mermaid",
+            ],
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "pwsh",
+                "workbench.colorTheme": "Default Dark Modern"
+            }
+        }
     },
-    "extensions": [
-        "dbaeumer.vscode-eslint"
-    ]
-}
-    },
-
-    "forwardPorts": [7185],    
-    "runArgs": ["--privileged"] // This is required to run minikube
+    "forwardPorts": [
+        3000
+    ],
 }

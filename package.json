@@ -9,11 +9,11 @@
     "dist/"
   ],
   "scripts": {
-    "build.sw": "vite build --mode production --config vite.config.sw.ts",
-    "build.register": "vite build --mode production --config vite.config.register.ts",
+    "build.sw": "vite build --mode production --config vite.config.sw.mts",
+    "build.register": "vite build --mode production --config vite.config.register.mts",
     "build": "run-s build.sw build.register",
-    "start.sw": "vite build --watch --mode development --config vite.config.sw.ts",
-    "start.register": "vite --port 3000 --mode development --config vite.config.register.ts",
+    "start.sw": "vite build --watch --mode development --config vite.config.sw.mts",
+    "start.register": "vite --port 3000 --mode development --config vite.config.register.mts",
     "start": "run-p start.sw start.register",
     "test": "echo \"Error: no test specified\" && exit 1",
     "typedoc": "npx typedoc --plugin typedoc-plugin-markdown --gitRevision main src/index.ts"

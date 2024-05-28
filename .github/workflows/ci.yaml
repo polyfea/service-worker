@@ -39,6 +39,22 @@ jobs:
       - id: semver
         uses: ildug/get-tag-action@v1
       - run: npm version --git-tag-version=false ${{ steps.semver.outputs.version }} 
+      - name: upload boot-mjs
+        uses: WebFreak001/upload-asset@v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          file: ./dist/boot.mjs
+          mime: application/javascript
+          name: sw.mjs
+      - name: upload boot-mjs
+        uses: WebFreak001/upload-asset@v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          file: ./dist/boot.mjs
+          mime: application/javascript
+          name: register.mjs
       - uses: JS-DevTools/npm-publish@v3
         with:
             token: ${{ secrets.GITHUB_TOKEN }}
