@@ -28,7 +28,9 @@ export function registerServiceWorker(cachingConfigPath: string = "", configReco
 
         swUrl.searchParams.set('base-path', new URL(document.baseURI).pathname);
 
-        const wb = new Workbox(swUrl.pathname + swUrl.search);
+        let scope = document.querySelector('meta[name="polyfea-sw-scope"]')?.getAttribute('content') || new  URL(document.baseURI, window.location.href).pathname || '/';
+
+        const wb = new Workbox(swUrl.pathname + swUrl.search, { type: 'module', scope });
 
         wb.register();
     }

@@ -2,7 +2,7 @@
 import { PrecacheController, PrecacheRoute } from 'workbox-precaching';
 import { setCacheNameDetails } from 'workbox-core';
 import { Router } from 'workbox-routing';
-import { Caching, PolyfeaRoute } from './polyfea-route';
+import { Caching, Interceptor, PolyfeaRoute } from './polyfea-route';
 import { logger } from './logger';
 
 /**
@@ -16,6 +16,7 @@ export class PolyfeaServiceWorker {
     private precacheController: PrecacheController;
     private router = new Router();
     private reconcilationInterval: number;
+    private interceptors: Array<Interceptor> = [];
 
     /**
      * Creates an instance of PolyfeaServiceWorker.
@@ -39,16 +40,11 @@ export class PolyfeaServiceWorker {
      * Starts the service worker by adding event listeners and setting up route reconciliation.
      */
     public async start() {
+        // Zlúčili sme fetch eventy do JEDNÉHO listenera
         this.scope.addEventListener('install', (event: ExtendableEvent) => this.install(event));
         this.scope.addEventListener('activate', (event: ExtendableEvent) => this.activate(event));
-        this.scope.addEventListener('fetch', (event: FetchEvent) => this.precache(event));
-        this.scope.addEventListener('fetch', (event: FetchEvent) => this.runtime(event));
-        this.scope.addEventListener('fetch', (event: FetchEvent) => this.fallback(event));
-
-        setInterval(() => {
-            this.reconcileRoutes();
-        }, this.reconcilationInterval);
-
+        this.scope.addEventListener('fetch', (event: FetchEvent) => this.handleFetch(event));
+        this.reconcileRoutes();
     }
 
     /**
@@ -86,6 +82,28 @@ export class PolyfeaServiceWorker {
                 caching.routes?.
                     map(PolyfeaRoute.from).
                     forEach((route: PolyfeaRoute) => this.router.registerRoute(route));
+
+                this.interceptors = [];
+                for (const interceptor of caching.interceptors || []) {
+                    try {
+                        const module = await import(interceptor.module);
+                        if (module && module.default && module.default.interceptor) {
+                            /* v8 ignore next 6 */
+                            this.interceptors.push((request, event) => {
+                                const resp =  module.default(request, event, interceptor.options);
+                                if (resp) {
+                                    logger.debug(`Request ${request.url} handled by interceptor: ${interceptor.name}`);
+                                }
+                                return resp;
+                            });
+                        } else {
+                            logger.warn(`Interceptor module ${interceptor.module} does not have a default export with an interceptor function`);
+                        }
+                    } catch (err) {
+                        logger.warn({ err }, `Failed to load interceptor module ${interceptor.module}`);
+                    }
+                }
+
                 logger.info(`Service worker reconciled: precached ${caching.precache?.length || 0} files and added ${caching.routes?.length || 0} routes`);
             }
             await this.setLastReconciliationTime(Date.now().toString());
@@ -142,7 +160,9 @@ export class PolyfeaServiceWorker {
         event.waitUntil((async () => {
             logger.debug("Installing");
             await this.reconcileRoutes(true);
-            await this.precacheController.install(event)
+            await this.precacheController.install(event);
+            
+            this.scope.skipWaiting(); 
         })());
     };
 
@@ -155,55 +175,51 @@ export class PolyfeaServiceWorker {
         event.waitUntil((async () => {
             logger.debug("Activating");
             this.precacheController.activate(event)
+
+            await this.scope.clients.claim();
         })());
     }
 
     /**
      * @private
-     * Handles the fetch event by responding from the precache if the URL is in the precache.
-     * @param event - The fetch event.
+     * cascading fetch handler
      */
-    private precache(event: FetchEvent) {
-        const log = logger.child({ request: event.request })
-        log.trace({ request: event.request }, `trying to fetch from the precache ${event.request.url}`);
-
+    private handleFetch(event: FetchEvent) {
         const { request } = event;
-
-        const key = this.precacheController.getCacheKeyForURL(request.url);
-        if (key) {
-            log.debug(`Responded from precache: ${event.request.url}`);
-            event.respondWith(caches.match(key) as Promise<Response>);
-            return;
+        const log = logger.child({ request });
+        this.reconcileRoutes().catch((err) => log.warn({ err }, "Failed to reconcile routes during fetch"));
+        
+        const precacheKey = this.precacheController.getCacheKeyForURL(request.url);
+        if (precacheKey) {
+            log.debug(`Responded from precache: ${request.url}`);
+            event.respondWith(caches.match(precacheKey) as Promise<Response>);
+            return; 
         }
-    }
 
-    /**
-     * @private
-     * Handles the fetch event by responding from the router if a matching route is found.
-     * @param event - The fetch event.
-     */
-    private runtime(event: FetchEvent) {
-        const log = logger.child({ request: event.request })
-        log.trace({ request: event.request }, `trying to fetch from the router ${event.request.url}`);
 
-        const { request } = event;
 
-        const responsePromise = this.router.handleRequest({
-            event,
-            request,
-        });
+        const responsePromise = this.router.handleRequest({ event, request });
         if (responsePromise) {
-            log.debug(`Responded from router: ${event.request.url}`);
+            log.debug(`Responded from router: ${request.url}`);
             event.respondWith(responsePromise);
+            return; 
         }
+
+        log.debug(`Route not found in SW, letting network handle it: ${request.url}`);
     }
 
-    /**
-     * @private
-     * Handles the fetch event when a route is not found.
-     * @param event - The fetch event.
-     */
-    private fallback(event: FetchEvent) {
-        logger.debug(`Route not found, ignoring: ${event.request.url}`);
+     async tryInterceptors(event: FetchEvent): Promise<Response | null> {
+        for (const interceptor of this.interceptors) {
+            try {
+                const response = await interceptor(event.request, event);
+                if (response) {
+                    return response;
+                }
+            } catch (error) {
+                logger.error({ error }, `Interceptor ${interceptor.name} failed for ${event.request.url}`);
+                
+            }
+        }
+        return null; // No MFE handled the request
     }
 }
