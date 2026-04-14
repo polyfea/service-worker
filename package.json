@@ -36,6 +36,8 @@
   },
   "homepage": "https://github.com/polyfea/service-worker#readme",
   "devDependencies": {
+    "@emnapi/core": "^1.9.2",
+    "@emnapi/runtime": "^1.9.2",
     "@vitest/coverage-v8": "^4.1.4",
     "eslint": "^10.2.0",
     "fake-indexeddb": "^6.2.5",
