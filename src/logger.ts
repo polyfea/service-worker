@@ -18,6 +18,7 @@ declare global {
 let loglevel =  (self.__POLYFEA_SW_LOGS_LEVEL === undefined) ?  self.__POLYFEA_LOGS_LEVEL : self.__POLYFEA_SW_LOGS_LEVEL;
 if (loglevel === undefined) {
 
+   /* v8 ignore next 3 */
    if (import.meta.env.MODE === "development") {
         loglevel = levels.values.debug;
     } else {
@@ -56,6 +57,7 @@ const logger = pino({
 
             let module = "polyfea"
             let e = new Error();
+            /* v8 ignore next 3 */
             if (!e.stack) {
                 try {throw e;} catch (e) {}
             }

@@ -57,6 +57,12 @@ export interface PolyfeaRouteOptions {
     statuses?: Array<number>;
 }
 
+export interface MicrofrontendInterceptor  {
+    name: string;
+    module: string;
+    options?: any;
+}
+
 /**
  * Caching configuration for the Polyfea route. The caching configuration is 
  * loaded dynamically from the specified URL or the default polyfea-caching.json file.
@@ -73,6 +79,9 @@ export interface Caching {
      * Array of Polyfea route options.
      */
     routes: Array<PolyfeaRouteOptions>;
+
+    /**  */
+    interceptors: Array<MicrofrontendInterceptor>;
 }
 
 /**
@@ -94,8 +103,7 @@ export class PolyfeaRoute extends RegExpRoute {
                     searchParams.
                     get('base-path') || '');
             if (!basePath) { 
-                basePath = new URL(globalThis.location.href).pathname.
-                    split('/').slice(0, -1).join('/') 
+                basePath = new URL((self as unknown as ServiceWorkerGlobalScope).registration.scope).pathname;
             }
             // create normalized absolute path
             prefix = new URL(prefix, `http://host${basePath}/`).pathname;
