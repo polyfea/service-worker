@@ -1,15 +1,12 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PolyfeaRoute } from '../src/polyfea-route';
 import type { PolyfeaRouteOptions } from '../src/polyfea-route';
-import { Queue } from 'workbox-background-sync';
+import { Queue, BackgroundSyncPlugin } from 'workbox-background-sync';
 
-// ── Reset workbox BackgroundSync queue registry before each test ─────────────
+// ── Reset workbox BackgroundSync mocks before each test ──────────────────────
 beforeEach(() => {
-    (Queue as any)._queueNames.clear();
-});
-
-afterEach(() => {
-    (Queue as any)._queueNames.clear();
+    vi.mocked(Queue).mockClear();
+    vi.mocked(BackgroundSyncPlugin).mockClear();
 });
 
 // Helper to build options with defaults

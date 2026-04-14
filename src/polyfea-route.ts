@@ -63,8 +63,6 @@ export interface MicrofrontendInterceptor  {
     options?: any;
 }
 
-export type Interceptor = ( request: Request, event: ExtendableEvent, options?: any ) => Promise<Response> | Response;
-
 /**
  * Caching configuration for the Polyfea route. The caching configuration is 
  * loaded dynamically from the specified URL or the default polyfea-caching.json file.

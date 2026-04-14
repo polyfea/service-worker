@@ -167,6 +167,29 @@ describe('PolyfeaServiceWorker', () => {
             await activateEvent._waitUntil();
             expect(scope.clients.claim).toHaveBeenCalled();
         });
+
+        it('calls activate() and handles errors from interceptors during activate event', async () => {
+            mockFetch({ precache: [], routes: [] });
+            const { sw, scope } = await buildSW();
+            await sw.start();
+
+            const goodActivate = vi.fn().mockResolvedValue(undefined);
+            const badActivate = vi.fn().mockRejectedValue(new Error('activate failed'));
+            vi.spyOn(sw as any, 'reconcileRoutes').mockImplementation(async () => {
+                (sw as any).interceptors = [
+                    { name: 'good', intercept: vi.fn(), activate: goodActivate },
+                    { name: 'bad', intercept: vi.fn(), activate: badActivate },
+                    { name: 'noActivate', intercept: vi.fn() },
+                ];
+            });
+
+            const activateEvent = makeExtendableEvent('activate');
+            (scope as any)._fire('activate', activateEvent);
+            await activateEvent._waitUntil();
+
+            expect(goodActivate).toHaveBeenCalled();
+            expect(badActivate).toHaveBeenCalled();
+        });
     });
 
     // ── reconcileRoutes ────────────────────────────────────────────────────
@@ -180,7 +203,9 @@ describe('PolyfeaServiceWorker', () => {
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
             await sw.start();
-            await flushPromises();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
             expect(global.fetch).toHaveBeenCalledWith('./polyfea-caching.json');
         });
 
@@ -202,7 +227,9 @@ describe('PolyfeaServiceWorker', () => {
             const scope = makeScopeMock(url);
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
             await sw.start();
-            await flushPromises();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
             expect(global.fetch).toHaveBeenCalledWith(configPath);
             // restore
             if (origDesc) {
@@ -214,17 +241,20 @@ describe('PolyfeaServiceWorker', () => {
 
         it('skips reconciliation when data is fresh (age < interval)', async () => {
             const recentTime = (Date.now() - 1000).toString(); // 1 second ago
-            createIDBMock(recentTime, false);
-            global.fetch = vi.fn().mockImplementation(() =>
-            Promise.resolve(new Response(JSON.stringify({ precache: [], routes: [] }), { status: 200 })));
+            createIDBMock(recentTime, true);
+            global.fetch = vi.fn() as any;
             vi.resetModules();
             const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
             await sw.start();
-            const fetchCallCount = (fetch as any).mock?.calls?.length ?? 0;
-            // fetch should only be called during install (forced), not again during start
-            expect(fetchCallCount).toBeLessThanOrEqual(1);
+            // Fire a non-install fetch event to trigger reconcileRoutes() with install=false
+            // IDB returns a recent time so reconciliation should be skipped
+            const fetchEvent = makeFetchEvent('http://localhost/page');
+            (scope as any)._fire('fetch', fetchEvent);
+            await flushPromises();
+            // global.fetch (the caching-config network call) should NOT be called - data is fresh
+            expect(global.fetch).not.toHaveBeenCalled();
         });
 
         it('handles fetch error gracefully', async () => {
@@ -234,8 +264,11 @@ describe('PolyfeaServiceWorker', () => {
             const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
-            // Should not throw
-            await expect(sw.start()).resolves.toBeUndefined();
+            await sw.start();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
+            expect(sw).toBeDefined();
         });
 
         it('handles non-2xx HTTP response gracefully', async () => {
@@ -245,7 +278,11 @@ describe('PolyfeaServiceWorker', () => {
             const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
-            await expect(sw.start()).resolves.toBeUndefined();
+            await sw.start();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
+            expect(sw).toBeDefined();
         });
 
         it('processes routes from caching config', async () => {
@@ -263,20 +300,25 @@ describe('PolyfeaServiceWorker', () => {
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
             await sw.start();
-            await flushPromises();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
             expect(sw).toBeDefined();
         });
 
         it('avoids re-adding already precached URLs', async () => {
-            // First call caches /index.html; second call should skip it
+            // First call caches /index.html as an object entry (covers pre.url branch)
             global.fetch = vi.fn().mockImplementation(() =>
-            Promise.resolve(new Response(JSON.stringify({ precache: ['/index.html'], routes: [] }), { status: 200 })));
+            Promise.resolve(new Response(JSON.stringify({ precache: [{ url: '/index.html', revision: '1' }], routes: [] }), { status: 200 })));
             createIDBMock(null, true);
             vi.resetModules();
             const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
             await sw.start();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
             // second reconcile (non-install) needs old enough timestamp
             createIDBMock(null, false);
             await (sw as any).reconcileRoutes(true);
@@ -284,29 +326,45 @@ describe('PolyfeaServiceWorker', () => {
         });
 
         it('loads interceptor module with valid interceptor export', async () => {
-            const interceptorFn = vi.fn().mockReturnValue(null);
-            (interceptorFn as any).interceptor = true;
-            const moduleMock = { default: interceptorFn };
+            // Use an absolute file:// URL so dynamic import resolves in Node.js
+            const interceptorMod = `file://${process.cwd()}/test-data/mock-interceptor.mjs`;
 
             global.fetch = vi.fn().mockImplementation(() =>
             Promise.resolve(new Response(JSON.stringify({
                     precache: [],
                     routes: [],
-                    interceptors: [{ name: 'myInterceptor', module: 'http://localhost/interceptor.mjs', options: { foo: 'bar' } }],
+                    interceptors: [{ name: 'myInterceptor', module: interceptorMod, options: {} }],
                 }), { status: 200 })));
 
-            vi.stubGlobal('import', async (_url: string) => moduleMock);
             createIDBMock(null, true);
             vi.resetModules();
-
-            // We need to spy on dynamic import at module level - use doMock
-            vi.doMock('http://localhost/interceptor.mjs', () => moduleMock);
 
             const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
             await sw.start();
-            expect(sw).toBeDefined();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
+
+            // Interceptor should be loaded; call tryInterceptors to invoke wrapper (lines 107-113)
+            const fetchEventNonPassthrough = makeFetchEvent('http://localhost/page');
+            const resp = await sw.tryInterceptors(fetchEventNonPassthrough as unknown as FetchEvent);
+            expect(resp).toBeDefined(); // wrapper returns a Response → covers if (resp) true branch
+
+            // Cover the if (resp) false branch by passing passThrough option
+            // (re-load with options.passThrough = true)
+            global.fetch = vi.fn().mockImplementation(() =>
+            Promise.resolve(new Response(JSON.stringify({
+                    precache: [],
+                    routes: [],
+                    interceptors: [{ name: 'myInterceptor', module: interceptorMod, options: { passThrough: true } }],
+                }), { status: 200 })));
+            createIDBMock(null, true);
+            await (sw as any).reconcileRoutes(true);
+            const fetchEventPassthrough = makeFetchEvent('http://localhost/page');
+            const resp2 = await sw.tryInterceptors(fetchEventPassthrough as unknown as FetchEvent);
+            expect(resp2).toBeUndefined(); // wrapper returns undefined → covers if (resp) false branch
         });
 
         it('warns when interceptor module has no default.interceptor', async () => {
@@ -318,13 +376,15 @@ describe('PolyfeaServiceWorker', () => {
                 }), { status: 200 })));
             createIDBMock(null, true);
             vi.resetModules();
-            // module without proper export
             vi.doMock('http://localhost/bad.mjs', () => ({ default: {} }));
             const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
-            // Should not throw
-            await expect(sw.start()).resolves.toBeUndefined();
+            await sw.start();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
+            expect(sw).toBeDefined();
         });
 
         it('warns when interceptor module fails to load', async () => {
@@ -339,7 +399,11 @@ describe('PolyfeaServiceWorker', () => {
             const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
             const scope = makeScopeMock();
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
-            await expect(sw.start()).resolves.toBeUndefined();
+            await sw.start();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
+            expect(sw).toBeDefined();
         });
     });
 
@@ -410,18 +474,35 @@ describe('PolyfeaServiceWorker', () => {
             // Should not throw
             expect(sw).toBeDefined();
         });
+
+        it('responds from interceptor when interceptor handles request', async () => {
+            global.fetch = vi.fn().mockImplementation(() =>
+            Promise.resolve(new Response(JSON.stringify({ precache: [], routes: [] }), { status: 200 })));
+            const { sw, scope } = await buildSW();
+            await sw.start();
+
+            const mockResponse = new Response('from interceptor');
+            (sw as any).interceptors = [
+                { name: 'a', intercept: vi.fn().mockReturnValue(Promise.resolve(mockResponse)) },
+            ];
+
+            const fetchEvent = makeFetchEvent('http://localhost/intercepted-page');
+            (scope as any)._fire('fetch', fetchEvent);
+            await flushPromises();
+            expect(fetchEvent.respondWith).toHaveBeenCalled();
+        });
     });
 
     // ── tryInterceptors ────────────────────────────────────────────────────
     describe('tryInterceptors()', () => {
-        it('returns null when no interceptors registered', async () => {
+        it('returns undefined when no interceptors registered', async () => {
             global.fetch = vi.fn().mockImplementation(() =>
             Promise.resolve(new Response(JSON.stringify({ precache: [], routes: [] }), { status: 200 })));
             const { sw } = await buildSW();
             await sw.start();
             const event = makeFetchEvent('http://localhost/test');
             const result = await sw.tryInterceptors(event as unknown as FetchEvent);
-            expect(result).toBeNull();
+            expect(result).toBeUndefined();
         });
 
         it('returns first non-null interceptor response', async () => {
@@ -431,22 +512,22 @@ describe('PolyfeaServiceWorker', () => {
             await sw.start();
             const mockResponse = new Response('intercepted');
             (sw as any).interceptors = [
-                vi.fn().mockResolvedValue(mockResponse),
+                { name: 'a', intercept: vi.fn().mockReturnValue(Promise.resolve(mockResponse)) },
             ];
             const event = makeFetchEvent('http://localhost/test');
             const result = await sw.tryInterceptors(event as unknown as FetchEvent);
             expect(result).toBe(mockResponse);
         });
 
-        it('skips null responses and returns next non-null one', async () => {
+        it('skips undefined responses and returns next non-null one', async () => {
             global.fetch = vi.fn().mockImplementation(() =>
             Promise.resolve(new Response(JSON.stringify({ precache: [], routes: [] }), { status: 200 })));
             const { sw } = await buildSW();
             await sw.start();
             const mockResponse = new Response('second interceptor');
             (sw as any).interceptors = [
-                vi.fn().mockResolvedValue(null),
-                vi.fn().mockResolvedValue(mockResponse),
+                { name: 'a', intercept: vi.fn().mockReturnValue(undefined) },
+                { name: 'b', intercept: vi.fn().mockReturnValue(Promise.resolve(mockResponse)) },
             ];
             const event = makeFetchEvent('http://localhost/test');
             const result = await sw.tryInterceptors(event as unknown as FetchEvent);
@@ -460,26 +541,26 @@ describe('PolyfeaServiceWorker', () => {
             await sw.start();
             const goodResponse = new Response('good');
             (sw as any).interceptors = [
-                vi.fn().mockRejectedValue(new Error('boom')),
-                vi.fn().mockResolvedValue(goodResponse),
+                { name: 'a', intercept: vi.fn().mockImplementation(() => { throw new Error('boom'); }) },
+                { name: 'b', intercept: vi.fn().mockReturnValue(Promise.resolve(goodResponse)) },
             ];
             const event = makeFetchEvent('http://localhost/test');
             const result = await sw.tryInterceptors(event as unknown as FetchEvent);
             expect(result).toBe(goodResponse);
         });
 
-        it('returns null when all interceptors return null', async () => {
+        it('returns undefined when all interceptors return undefined', async () => {
             global.fetch = vi.fn().mockImplementation(() =>
             Promise.resolve(new Response(JSON.stringify({ precache: [], routes: [] }), { status: 200 })));
             const { sw } = await buildSW();
             await sw.start();
             (sw as any).interceptors = [
-                vi.fn().mockResolvedValue(null),
-                vi.fn().mockResolvedValue(null),
+                { name: 'a', intercept: vi.fn().mockReturnValue(undefined) },
+                { name: 'b', intercept: vi.fn().mockReturnValue(undefined) },
             ];
             const event = makeFetchEvent('http://localhost/test');
             const result = await sw.tryInterceptors(event as unknown as FetchEvent);
-            expect(result).toBeNull();
+            expect(result).toBeUndefined();
         });
     });
 

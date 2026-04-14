@@ -72,6 +72,23 @@ Object.defineProperty(globalThis, 'caches', {
     configurable: true,
 });
 
+vi.mock('workbox-background-sync', () => {
+  return {
+    Queue: vi.fn().mockImplementation(function () {
+      return {
+        pushRequest: vi.fn(),
+        replayRequests: vi.fn(),
+        shiftRequest: vi.fn(),
+        unshiftRequest: vi.fn(),
+        popRequest: vi.fn(),
+      };
+    }),
+    BackgroundSyncPlugin: vi.fn().mockImplementation(function () {
+      return {};
+    }),
+  };
+});
+
 // ── Minimal IndexedDB mock ───────────────────────────────────────────────────
 export function createIDBMock(storedValue: string | null = null, triggerUpgrade = false) {
     const objectStoreMock = {
