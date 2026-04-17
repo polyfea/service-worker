@@ -59,7 +59,7 @@ jobs:
           scope: '@polyfea'
 
       - name: Publish to GitHub Registry
-        run: npm publish --provenance
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
