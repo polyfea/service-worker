@@ -43,6 +43,20 @@ jobs:
       - id: semver
         uses: ildug/get-tag-action@v1
       - run: npm version --git-tag-version=false ${{ steps.semver.outputs.version }} 
+      - name: Publish to NPM
+        run: npm publish --provenance --access public
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '25'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@polyfea'
+
+      - name: Publish to GitHub Registry
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: upload boot-mjs
         uses: WebFreak001/upload-asset@v1.0.0
         env:
@@ -51,6 +65,7 @@ jobs:
           file: ./dist/sw.mjs
           mime: application/javascript
           name: sw.mjs
+
       - name: upload boot-mjs
         uses: WebFreak001/upload-asset@v1.0.0
         env:
@@ -59,10 +74,7 @@ jobs:
           file: ./dist/register.mjs
           mime: application/javascript
           name: register.mjs
-      - uses: JS-DevTools/npm-publish@v3
-        with:
-            token: ${{ secrets.GITHUB_TOKEN }}
-            registry: "https://npm.pkg.github.com"
-            access: "public"
-      - run: npm publish --provenance --access public
+      
+      
+      
       
