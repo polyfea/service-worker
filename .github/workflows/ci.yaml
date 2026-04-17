@@ -64,5 +64,5 @@ jobs:
             token: ${{ secrets.GITHUB_TOKEN }}
             registry: "https://npm.pkg.github.com"
             access: "public"
-      - - run: npm publish --provenance --access public
+      - run: npm publish --provenance --access public
       
