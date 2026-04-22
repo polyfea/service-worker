@@ -1,4 +1,4 @@
-import { PrecacheController, PrecacheRoute } from "workbox-precaching";
+import { PrecacheController } from "workbox-precaching";
 import { setCacheNameDetails } from "workbox-core";
 import { Router } from "workbox-routing";
 import { Caching, PolyfeaRoute } from "./polyfea-route";
@@ -28,6 +28,7 @@ export class PolyfeaServiceWorker {
   private router = new Router();
   private reconcilationInterval: number;
   private interceptors: Array<InterceptorModule> = [];
+  private routesRestored = false;
 
   /**
    * Creates an instance of PolyfeaServiceWorker.
@@ -63,10 +64,20 @@ export class PolyfeaServiceWorker {
    * Reconciles the routes by fetching the caching configuration and updating the precache and router.
    */
   private async reconcileRoutes(install = false) {
+    // On every SW process restart the in-memory router is empty.
+    // Restore routes from the last persisted config before checking freshness.
+    if (!this.routesRestored) {
+      this.routesRestored = true;
+      const stored = await this.getStoredConfig();
+      if (stored) {
+        await this.applyConfig(stored);
+      }
+    }
+
     const lastReconciliationTime = await this.getLastReconciliationTime();
     let age: number = 0;
     if (lastReconciliationTime) {
-      age = Date.now() + 1000 - parseInt(lastReconciliationTime);
+      age = Date.now() - parseInt(lastReconciliationTime); // Fix: removed erroneous +1000
     }
 
     if (!install && age && age < this.reconcilationInterval) {
@@ -82,56 +93,128 @@ export class PolyfeaServiceWorker {
       const response = await fetch(config);
       if (response.status < 300) {
         const caching = (await response.json()) as Caching;
-        this.precacheController.addToCacheList(
-          (caching.precache || []).filter((pre) => {
-            const url = typeof pre === "string" ? pre : pre.url;
-            return !this.precacheController.getCacheKeyForURL(url);
-          }),
-        );
-
-        this.router.routes.clear();
-
-        caching.routes
-          ?.map(PolyfeaRoute.from)
-          .forEach((route: PolyfeaRoute) => this.router.registerRoute(route));
-
-        this.interceptors = [];
-        for (const interceptor of caching.interceptors || []) {
-          try {
-            const module = await import(interceptor.module);
-            if (module && module.default && module.default.interceptor) {
-              this.interceptors.push(
-                Object.assign(module.default, {
-                  name: interceptor.name,
-                  intercept: (request: Request, event: FetchEvent) => {
-                    const resp = module.default.interceptor(request, event, interceptor.options);
-                    if (resp) {
-                      logger.debug(
-                        `Request ${request.url} handled by interceptor: ${interceptor.name}`,
-                      );
-                    }
-                    return resp;
-                  },
-                }),
-              );
-            } else {
-              logger.warn(
-                `Interceptor module ${interceptor.module} does not have a default export with an interceptor function`,
-              );
-            }
-          } catch (err) {
-            logger.warn({ err }, `Failed to load interceptor module ${interceptor.module}`);
-          }
-        }
-
+        await this.applyConfig(caching, install);
+        await this.setStoredConfig(caching);
+        // Fix: timestamp only set on success, not on non-2xx responses
+        await this.setLastReconciliationTime(Date.now().toString());
         logger.info(
           `Service worker reconciled: precached ${caching.precache?.length || 0} files and added ${caching.routes?.length || 0} routes`,
         );
       }
-      await this.setLastReconciliationTime(Date.now().toString());
     } catch (error) {
       logger.warn({ err: error }, "Failed to reconcile routes");
     }
+  }
+
+  /**
+   * @private
+   * Applies a caching configuration to the in-memory router and interceptors.
+   */
+  private async applyConfig(caching: Caching, install = false): Promise<void> {
+    const newPrecacheUrls = (caching.precache || []).filter((pre) => {
+      const url = typeof pre === "string" ? pre : pre.url;
+      return !this.precacheController.getCacheKeyForURL(url);
+    });
+
+    this.precacheController.addToCacheList(newPrecacheUrls);
+    if (!install && newPrecacheUrls.length > 0) {
+      try {
+        const cache = await caches.open('polyfea-install-time-v1');
+        const fetchPromises = newPrecacheUrls.map(async (pre) => {
+          const url = typeof pre === "string" ? pre : pre.url;
+          const cacheKey = this.precacheController.getCacheKeyForURL(url);
+          if (cacheKey) {
+            const existing = await cache.match(cacheKey);
+            if (!existing) {
+              const response = await fetch(url);
+              if (response.ok) {
+                await cache.put(cacheKey, response);
+              }
+            }
+          }
+        });
+        await Promise.all(fetchPromises);
+        logger.debug(`Dynamically populated missing items into install-time cache`);
+      } catch (err) {
+        logger.error({ err }, "Failed to dynamically populate install-time cache");
+      }
+    }
+
+    this.router.routes.clear();
+    caching.routes
+      ?.map(PolyfeaRoute.from)
+      .forEach((route: PolyfeaRoute) => this.router.registerRoute(route));
+
+    this.interceptors = [];
+    for (const interceptor of caching.interceptors || []) {
+      try {
+        const module = await import(interceptor.module);
+        if (module && module.default && module.default.interceptor) {
+          const name = interceptor.name;
+          const options = interceptor.options;
+          // Fix: Object.assign({}, ...) avoids mutating the live ES module export
+          this.interceptors.push(
+            Object.assign({}, module.default, {
+              name,
+              intercept: (request: Request, event: FetchEvent) => {
+                const resp = module.default.interceptor(request, event, options);
+                if (resp) {
+                  logger.debug(`Request ${request.url} handled by interceptor: ${name}`);
+                }
+                return resp;
+              },
+            }),
+          );
+        } else {
+          logger.warn(
+            `Interceptor module ${interceptor.module} does not have a default export with an interceptor function`,
+          );
+        }
+      } catch (err) {
+        logger.warn({ err }, `Failed to load interceptor module ${interceptor.module}`);
+      }
+    }
+  }
+
+  private async getStoredConfig(): Promise<Caching | null> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open("polyfeaDB", 1);
+      request.onerror = () => reject(request.error);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore("reconciliationTime", { keyPath: "id" });
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const store = db.transaction("reconciliationTime", "readonly").objectStore("reconciliationTime");
+        const getRequest = store.get("cachedConfig");
+        getRequest.onerror = () => resolve(null);
+        getRequest.onsuccess = () => {
+          const value = getRequest.result?.value;
+          if (value) {
+            try { resolve(JSON.parse(value) as Caching); } catch { resolve(null); }
+          } else {
+            resolve(null);
+          }
+        };
+      };
+    });
+  }
+
+  private async setStoredConfig(caching: Caching): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open("polyfeaDB", 1);
+      request.onerror = () => reject(request.error);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore("reconciliationTime", { keyPath: "id" });
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const store = db.transaction("reconciliationTime", "readwrite").objectStore("reconciliationTime");
+        const putRequest = store.put({ id: "cachedConfig", value: JSON.stringify(caching) });
+        putRequest.onerror = () => reject(putRequest.error);
+        putRequest.onsuccess = () => resolve();
+      };
+    });
   }
 
   private async getLastReconciliationTime(): Promise<string | null> {
@@ -139,16 +222,14 @@ export class PolyfeaServiceWorker {
       const request = indexedDB.open("polyfeaDB", 1);
       request.onerror = () => reject(request.error);
       request.onupgradeneeded = () => {
-        const db = request.result;
-        db.createObjectStore("reconciliationTime", { keyPath: "id" });
+        request.result.createObjectStore("reconciliationTime", { keyPath: "id" });
       };
       request.onsuccess = () => {
         const db = request.result;
-        const transaction = db.transaction("reconciliationTime", "readonly");
-        const objectStore = transaction.objectStore("reconciliationTime");
-        const getRequest = objectStore.get("lastReconciliationTime");
+        const store = db.transaction("reconciliationTime", "readonly").objectStore("reconciliationTime");
+        const getRequest = store.get("lastReconciliationTime");
         getRequest.onerror = () => resolve(null);
-        getRequest.onsuccess = () => resolve(getRequest.result?.value);
+        getRequest.onsuccess = () => resolve(getRequest.result?.value ?? null);
       };
     });
   }
@@ -158,14 +239,12 @@ export class PolyfeaServiceWorker {
       const request = indexedDB.open("polyfeaDB", 1);
       request.onerror = () => reject(request.error);
       request.onupgradeneeded = () => {
-        const db = request.result;
-        db.createObjectStore("reconciliationTime");
+        request.result.createObjectStore("reconciliationTime");
       };
       request.onsuccess = () => {
         const db = request.result;
-        const transaction = db.transaction("reconciliationTime", "readwrite");
-        const objectStore = transaction.objectStore("reconciliationTime");
-        const putRequest = objectStore.put({ id: "lastReconciliationTime", value });
+        const store = db.transaction("reconciliationTime", "readwrite").objectStore("reconciliationTime");
+        const putRequest = store.put({ id: "lastReconciliationTime", value });
         putRequest.onerror = () => reject(putRequest.error);
         putRequest.onsuccess = () => resolve();
       };
@@ -223,14 +302,17 @@ export class PolyfeaServiceWorker {
   private handleFetch(event: FetchEvent) {
     const { request } = event;
     const log = logger.child({ request });
-    this.reconcileRoutes().catch((err) =>
+    // invoke background reconcilation if needed, but do not await it - we don't want to delay the response
+    setTimeout(() => this.reconcileRoutes().catch((err) =>
       log.warn({ err }, "Failed to reconcile routes during fetch"),
-    );
+    ), 0);
+    
 
     const precacheKey = this.precacheController.getCacheKeyForURL(request.url);
     if (precacheKey) {
       log.debug(`Responded from precache: ${request.url}`);
-      event.respondWith(caches.match(precacheKey) as Promise<Response>);
+      // Fix: caches.match can return undefined; fall back to network to avoid rejecting the fetch
+      event.respondWith(caches.match(precacheKey).then((r) => r ?? fetch(request)));
       return;
     }
 
@@ -256,7 +338,7 @@ export class PolyfeaServiceWorker {
       try {
         const response = interceptor.intercept(event.request, event);
         if (response) {
-          return response || undefined;
+          return response;
         }
       } catch (error) {
         logger.error({ error }, `Interceptor ${interceptor.name} failed for ${event.request.url}`);

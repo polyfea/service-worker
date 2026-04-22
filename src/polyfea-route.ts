@@ -5,7 +5,7 @@ import { RouteMatchCallbackOptions, WorkboxPlugin } from 'workbox-core';
 import { ExpirationPlugin } from 'workbox-expiration';
 import { CacheableResponsePlugin } from 'workbox-cacheable-response';
 import {BackgroundSyncPlugin} from 'workbox-background-sync';
-
+import { BroadcastUpdatePlugin } from 'workbox-broadcast-update';
 
 /**
  * Options for defining a Polyfea route. One of prefix, pattern, or destination must be specified.
@@ -30,6 +30,11 @@ export interface PolyfeaRouteOptions {
      * Cache strategy to use for this route. Defaults to "cache-first".
      */
     strategy?: "cache-first" | "network-first" | "cache-only" | "network-only" | "stale-while-revalidate";
+
+    /**
+     * Specific cache where the responses should be stored. Defaults to shared runtime cache.
+     */
+    cacheName?: string;
 
     /**
      * If specified, the cached entries will be deleted after the specified time in seconds.
@@ -105,8 +110,9 @@ export class PolyfeaRoute extends RegExpRoute {
             if (!basePath) { 
                 basePath = new URL((self as unknown as ServiceWorkerGlobalScope).registration.scope).pathname;
             }
-            // create normalized absolute path
-            prefix = new URL(prefix, `http://host${basePath}/`).pathname;
+            // Strip trailing slash before building base URL to avoid double-slash
+            // (registration.scope pathname ends with '/', base-path param typically does not)
+            prefix = new URL(prefix, `http://host${basePath.replace(/\/$/, '')}/`).pathname;
         }
 
         let handler: any;
@@ -127,25 +133,30 @@ export class PolyfeaRoute extends RegExpRoute {
                 maxRetentionTime: route.syncRetentionMinutes, 
               }));
             }
+        if (route.strategy === 'stale-while-revalidate') {
+            plugins.push(new BroadcastUpdatePlugin());
+        }
+
+        const cacheName = route.cacheName || 'polyfea-run-time-v1';
 
         switch (route.strategy) {
             case "cache-first":
-                handler = new CacheFirst({ plugins });
+                handler = new CacheFirst({ cacheName, plugins });
                 break;
             case "cache-only":
-                handler = new CacheOnly({ plugins });
+                handler = new CacheOnly({ cacheName, plugins });
                 break;
             case "network-first":
-                handler = new NetworkFirst({ plugins });
+                handler = new NetworkFirst({ cacheName, plugins });
                 break;
             case "network-only":
-                handler = new NetworkOnly({plugins});
+                handler = new NetworkOnly({ plugins });
                 break;
             case "stale-while-revalidate":
-                handler = new StaleWhileRevalidate({ plugins });
+                handler = new StaleWhileRevalidate({ cacheName, plugins });
                 break;
             default:
-                handler = new CacheFirst({ plugins });
+                handler = new CacheFirst({ cacheName, plugins });
                 break;
         }
 
@@ -162,7 +173,7 @@ export class PolyfeaRoute extends RegExpRoute {
             if (route.destination && options.request.destination !== route.destination) {
                 return false;
             }
-            if (route.prefix && !options.url.pathname.startsWith(route.prefix)) {
+            if (prefix && !options.url.pathname.startsWith(prefix)) {
                 return false;
             }
             

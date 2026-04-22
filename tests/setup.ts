@@ -90,14 +90,19 @@ vi.mock('workbox-background-sync', () => {
 });
 
 // ── Minimal IndexedDB mock ───────────────────────────────────────────────────
-export function createIDBMock(storedValue: string | null = null, triggerUpgrade = false) {
+export function createIDBMock(storedValue: string | null = null, triggerUpgrade = false, storedConfig: object | null = null) {
     const objectStoreMock = {
-        get: vi.fn().mockImplementation(() => {
+        get: vi.fn().mockImplementation((key: string) => {
             const req: any = {};
             queueMicrotask(() => {
-                // When no stored value, still return a record with value=null so
-                // getRequest.result?.value resolves to null (not undefined)
-                req.result = { id: 'lastReconciliationTime', value: storedValue };
+                if (key === 'cachedConfig') {
+                    req.result = storedConfig
+                        ? { id: 'cachedConfig', value: JSON.stringify(storedConfig) }
+                        : null;
+                } else {
+                    // lastReconciliationTime (and any other key)
+                    req.result = { id: 'lastReconciliationTime', value: storedValue };
+                }
                 req.onsuccess?.({ target: req } as any);
             });
             return req;

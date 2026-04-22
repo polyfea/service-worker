@@ -86,16 +86,11 @@ describe('PolyfeaRoute', () => {
         });
 
         it('resolves relative prefix against base-path search param', () => {
-            // The PolyfeaRoute constructor reads globalThis.location.href to resolve base-path.
-            // It then passes the ORIGINAL route.prefix string to the match closure for pathname check.
-            // So for a relative prefix like 'assets', the closure checks pathname.startsWith('assets'),
-            // which never matches (pathnames start with '/').
-            // Only absolute prefixes work correctly with the match closure.
-            // Test the actual behaviour: absolute prefix /app/assets works.
             withLocation('http://localhost/app/sw.mjs?base-path=%2Fapp', () => {
                 (self as any).location = { href: 'http://localhost/app/sw.mjs?base-path=%2Fapp' };
                 (self as any).registration = { scope: 'http://localhost/app/' };
-                const route = new PolyfeaRoute(makeOpts({ prefix: '/app/assets' }));
+                // 'assets' is relative; constructor resolves it to /app/assets via base-path
+                const route = new PolyfeaRoute(makeOpts({ prefix: 'assets' }));
                 expect(route.match(makeMatchOptions('http://localhost/app/assets/logo.png'))).toBeTruthy();
                 expect(route.match(makeMatchOptions('http://localhost/other/logo.png'))).toBeFalsy();
                 (self as any).location = { href: 'http://localhost/sw.mjs' };
@@ -104,11 +99,11 @@ describe('PolyfeaRoute', () => {
         });
 
         it('resolves prefix from registration.scope when no base-path param', () => {
-            // Same note: only absolute prefixes work in match closure.
             withLocation('http://localhost/sw.mjs', () => {
                 (self as any).location = { href: 'http://localhost/sw.mjs' };
                 (self as any).registration = { scope: 'http://localhost/myapp/' };
-                const route = new PolyfeaRoute(makeOpts({ prefix: '/myapp/files' }));
+                // 'files' is relative; constructor resolves it to /myapp/files via registration.scope
+                const route = new PolyfeaRoute(makeOpts({ prefix: 'files' }));
                 expect(route.match(makeMatchOptions('http://localhost/myapp/files/doc.txt'))).toBeTruthy();
                 expect(route.match(makeMatchOptions('http://localhost/other/doc.txt'))).toBeFalsy();
                 (self as any).registration = { scope: 'http://localhost/' };
