@@ -57,8 +57,8 @@ function makeFetchEvent(url: string, destination = '') {
     return event;
 }
 
-async function buildSW(href = 'http://localhost/sw.mjs', storedTime: string | null = null) {
-    createIDBMock(storedTime, true);
+async function buildSW(href = 'http://localhost/sw.mjs', storedTime: string | null = null, storedConfig: object | null = null) {
+    createIDBMock(storedTime, true, storedConfig);
     const scope = makeScopeMock(href);
     (self as any).location = { href };
     (self as any).registration = { scope: 'http://localhost/' };
@@ -89,6 +89,9 @@ describe('PolyfeaServiceWorker', () => {
     afterEach(() => {
         vi.useRealTimers();
         vi.restoreAllMocks();
+        // Reset IDB to a safe default after each test to prevent leaked async
+        // callbacks from previous tests hitting an incomplete IDB mock.
+        createIDBMock(null, false);
     });
 
     // ── constructor ────────────────────────────────────────────────────────
@@ -240,7 +243,7 @@ describe('PolyfeaServiceWorker', () => {
         });
 
         it('skips reconciliation when data is fresh (age < interval)', async () => {
-            const recentTime = (Date.now() - 1000).toString(); // 1 second ago
+            const recentTime = (Date.now() - 1000).toString(); // 1 second ago, well within 30-min interval
             createIDBMock(recentTime, true);
             global.fetch = vi.fn() as any;
             vi.resetModules();
@@ -255,6 +258,46 @@ describe('PolyfeaServiceWorker', () => {
             await flushPromises();
             // global.fetch (the caching-config network call) should NOT be called - data is fresh
             expect(global.fetch).not.toHaveBeenCalled();
+        });
+
+        it('does not stamp reconciliation time when response is non-2xx', async () => {
+            global.fetch = vi.fn().mockResolvedValue(new Response('not found', { status: 404 }));
+            const { objectStoreMock } = createIDBMock(null, true);
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            await sw.start();
+            const installEvent = makeExtendableEvent('install');
+            (scope as any)._fire('install', installEvent);
+            await installEvent._waitUntil();
+            // setLastReconciliationTime and setStoredConfig must NOT write when fetch returned 404
+            expect(objectStoreMock.put).not.toHaveBeenCalled();
+        });
+
+        it('restores routes from stored config on SW restart without a network fetch', async () => {
+            const recentTime = (Date.now() - 1000).toString(); // fresh, within interval
+            const storedConfig = {
+                precache: [],
+                routes: [{ pattern: '/api/.*', strategy: 'network-first' }],
+                interceptors: [],
+            };
+            createIDBMock(recentTime, false, storedConfig);
+            global.fetch = vi.fn() as any; // must NOT be called
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            await sw.start();
+
+            const fetchEvent = makeFetchEvent('http://localhost/page');
+            (scope as any)._fire('fetch', fetchEvent);
+            await flushPromises();
+
+            // Network fetch skipped (data fresh), but routes restored from IDB
+            expect(global.fetch).not.toHaveBeenCalled();
+            expect((sw as any).routesRestored).toBe(true);
+            expect((sw as any).router.routes.size).toBeGreaterThan(0);
         });
 
         it('handles fetch error gracefully', async () => {
@@ -407,6 +450,126 @@ describe('PolyfeaServiceWorker', () => {
         });
     });
 
+    // ── applyConfig dynamic cache population ───────────────────────────────
+    describe('applyConfig dynamic cache population (install=false)', () => {
+        function makeCacheMock(existingResponse: Response | undefined = undefined) {
+            const put = vi.fn().mockResolvedValue(undefined);
+            const match = vi.fn().mockResolvedValue(existingResponse);
+            return { put, match, _cache: { put, match } };
+        }
+
+        async function buildSwWithCacheMock(cacheMock: { put: any; match: any }) {
+            createIDBMock(null, true);
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            Object.defineProperty(globalThis, 'caches', {
+                value: {
+                    ...(globalThis as any).caches,
+                    open: vi.fn().mockResolvedValue(cacheMock),
+                },
+                writable: true,
+                configurable: true,
+            });
+            return sw;
+        }
+
+        it('fetches and caches a new string URL when not already in cache', async () => {
+            const { put, match } = makeCacheMock(undefined); // cache miss
+            const sw = await buildSwWithCacheMock({ put, match });
+            global.fetch = vi.fn().mockResolvedValue(new Response('content', { status: 200 }));
+
+            await (sw as any).applyConfig({ precache: ['http://localhost/asset.js'], routes: [] }, false);
+
+            expect(match).toHaveBeenCalled();
+            expect(put).toHaveBeenCalled();
+        });
+
+        it('fetches and caches a new object URL (pre.url branch) when not in cache', async () => {
+            const { put, match } = makeCacheMock(undefined);
+            const sw = await buildSwWithCacheMock({ put, match });
+            global.fetch = vi.fn().mockResolvedValue(new Response('content', { status: 200 }));
+
+            await (sw as any).applyConfig(
+                { precache: [{ url: 'http://localhost/other.js', revision: '2' }], routes: [] },
+                false,
+            );
+
+            expect(match).toHaveBeenCalled();
+            expect(put).toHaveBeenCalled();
+        });
+
+        it('skips fetch when URL is already present in cache', async () => {
+            const { put, match } = makeCacheMock(new Response('existing'));
+            const sw = await buildSwWithCacheMock({ put, match });
+            global.fetch = vi.fn();
+
+            await (sw as any).applyConfig({ precache: ['http://localhost/cached.js'], routes: [] }, false);
+
+            expect(match).toHaveBeenCalled();
+            expect(put).not.toHaveBeenCalled();
+            expect(global.fetch).not.toHaveBeenCalled();
+        });
+
+        it('does not put to cache when fetch response is not ok', async () => {
+            const { put, match } = makeCacheMock(undefined);
+            const sw = await buildSwWithCacheMock({ put, match });
+            global.fetch = vi.fn().mockResolvedValue(new Response('error', { status: 500 }));
+
+            await (sw as any).applyConfig({ precache: ['http://localhost/fail.js'], routes: [] }, false);
+
+            expect(match).toHaveBeenCalled();
+            expect(put).not.toHaveBeenCalled();
+        });
+
+        it('logs error and does not throw when caches.open rejects', async () => {
+            createIDBMock(null, true);
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            Object.defineProperty(globalThis, 'caches', {
+                value: {
+                    ...(globalThis as any).caches,
+                    open: vi.fn().mockRejectedValue(new Error('cache unavailable')),
+                },
+                writable: true,
+                configurable: true,
+            });
+
+            await expect(
+                (sw as any).applyConfig({ precache: ['http://localhost/err.js'], routes: [] }, false),
+            ).resolves.toBeUndefined();
+        });
+
+        it('treats missing precache property as empty list (covers || [] branch)', async () => {
+            createIDBMock(null, true);
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            // No precache key at all → triggers `caching.precache || []`
+            await expect(
+                (sw as any).applyConfig({ routes: [] }, false),
+            ).resolves.toBeUndefined();
+        });
+
+        it('skips cache entry when getCacheKeyForURL returns null in map (covers if (cacheKey) false branch)', async () => {
+            const { put, match } = makeCacheMock(undefined);
+            const sw = await buildSwWithCacheMock({ put, match });
+            global.fetch = vi.fn();
+
+            // After addToCacheList, mock getCacheKeyForURL to return null so the if body is skipped
+            vi.spyOn((sw as any).precacheController, 'getCacheKeyForURL').mockReturnValue(null);
+
+            await (sw as any).applyConfig({ precache: ['http://localhost/no-key.js'], routes: [] }, false);
+
+            expect(match).not.toHaveBeenCalled();
+            expect(put).not.toHaveBeenCalled();
+        });
+    });
+
     // ── handleFetch ────────────────────────────────────────────────────────
     describe('handleFetch', () => {
         it('passes through when no precache key and no router match', async () => {
@@ -490,6 +653,41 @@ describe('PolyfeaServiceWorker', () => {
             (scope as any)._fire('fetch', fetchEvent);
             await flushPromises();
             expect(fetchEvent.respondWith).toHaveBeenCalled();
+        });
+
+        it('falls back to network when precache key exists but entry is missing from cache storage', async () => {
+            global.fetch = vi.fn().mockImplementation(() =>
+                Promise.resolve(new Response(JSON.stringify({ precache: [], routes: [] }), { status: 200 }))
+            );
+            const { sw, scope } = await buildSW();
+            await sw.start();
+
+            const ctrl = (sw as any).precacheController;
+            vi.spyOn(ctrl, 'getCacheKeyForURL').mockReturnValue('http://localhost/index.html?__WB_REVISION__=1');
+
+            // Simulate cache miss
+            const networkResponse = new Response('from network');
+            const cachesMiss = {
+                ...(globalThis as any).caches,
+                match: vi.fn().mockResolvedValue(undefined),
+            };
+            Object.defineProperty(globalThis, 'caches', { value: cachesMiss, writable: true, configurable: true });
+            global.fetch = vi.fn().mockResolvedValue(networkResponse);
+
+            const fetchEvent = makeFetchEvent('http://localhost/index.html');
+            (scope as any)._fire('fetch', fetchEvent);
+            await flushPromises();
+
+            expect(fetchEvent.respondWith).toHaveBeenCalled();
+            const response = await fetchEvent._responsePromise();
+            expect(response).toBeDefined();
+
+            // Restore
+            Object.defineProperty(globalThis, 'caches', {
+                value: (globalThis as any).caches,
+                writable: true,
+                configurable: true,
+            });
         });
     });
 
@@ -708,6 +906,142 @@ describe('PolyfeaServiceWorker', () => {
             const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
             const time = await (sw as any).getLastReconciliationTime();
             expect(time).toBeNull();
+        });
+
+        it('getStoredConfig rejects when IDB open errors', async () => {
+            const openReq: any = { error: new Error('idb open failed') };
+            const idbMock = {
+                open: vi.fn().mockImplementation(() => {
+                    queueMicrotask(() => openReq.onerror?.());
+                    return openReq;
+                }),
+            };
+            Object.defineProperty(globalThis, 'indexedDB', {
+                value: idbMock,
+                writable: true,
+                configurable: true,
+            });
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            await expect((sw as any).getStoredConfig()).rejects.toBeDefined();
+        });
+
+        it('getStoredConfig resolves null when objectStore.get errors', async () => {
+            const getReq: any = {};
+            const objectStoreMock = {
+                get: vi.fn().mockImplementation(() => {
+                    queueMicrotask(() => getReq.onerror?.());
+                    return getReq;
+                }),
+                createObjectStore: vi.fn(),
+            };
+            const transactionMock = { objectStore: vi.fn().mockReturnValue(objectStoreMock) };
+            const dbMock = { transaction: vi.fn().mockReturnValue(transactionMock), createObjectStore: vi.fn() };
+            const openReq: any = { result: dbMock };
+            const idbMock = {
+                open: vi.fn().mockImplementation(() => {
+                    queueMicrotask(() => openReq.onsuccess?.({ target: openReq } as any));
+                    return openReq;
+                }),
+            };
+            Object.defineProperty(globalThis, 'indexedDB', {
+                value: idbMock,
+                writable: true,
+                configurable: true,
+            });
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            const result = await (sw as any).getStoredConfig();
+            expect(result).toBeNull();
+        });
+
+        it('getStoredConfig resolves null when stored value is invalid JSON', async () => {
+            const getReq: any = {};
+            const objectStoreMock = {
+                get: vi.fn().mockImplementation(() => {
+                    // Return an invalid JSON string as the stored value
+                    queueMicrotask(() => {
+                        getReq.result = { id: 'cachedConfig', value: 'not-valid-json{{{' };
+                        getReq.onsuccess?.({ target: getReq } as any);
+                    });
+                    return getReq;
+                }),
+                createObjectStore: vi.fn(),
+            };
+            const transactionMock = { objectStore: vi.fn().mockReturnValue(objectStoreMock) };
+            const dbMock = { transaction: vi.fn().mockReturnValue(transactionMock), createObjectStore: vi.fn() };
+            const openReq: any = { result: dbMock };
+            const idbMock = {
+                open: vi.fn().mockImplementation(() => {
+                    queueMicrotask(() => openReq.onsuccess?.({ target: openReq } as any));
+                    return openReq;
+                }),
+            };
+            Object.defineProperty(globalThis, 'indexedDB', {
+                value: idbMock,
+                writable: true,
+                configurable: true,
+            });
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            const result = await (sw as any).getStoredConfig();
+            expect(result).toBeNull();
+        });
+
+        it('setStoredConfig rejects when IDB open errors', async () => {
+            const openReq: any = { error: new Error('idb open failed') };
+            const idbMock = {
+                open: vi.fn().mockImplementation(() => {
+                    queueMicrotask(() => openReq.onerror?.());
+                    return openReq;
+                }),
+            };
+            Object.defineProperty(globalThis, 'indexedDB', {
+                value: idbMock,
+                writable: true,
+                configurable: true,
+            });
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            await expect((sw as any).setStoredConfig({ routes: [] })).rejects.toBeDefined();
+        });
+
+        it('setStoredConfig rejects when put errors', async () => {
+            const putReq: any = { error: new Error('put failed') };
+            const objectStoreMock = {
+                put: vi.fn().mockImplementation(() => {
+                    queueMicrotask(() => putReq.onerror?.());
+                    return putReq;
+                }),
+                createObjectStore: vi.fn(),
+            };
+            const transactionMock = { objectStore: vi.fn().mockReturnValue(objectStoreMock) };
+            const dbMock = { transaction: vi.fn().mockReturnValue(transactionMock), createObjectStore: vi.fn() };
+            const openReq: any = { result: dbMock };
+            const idbMock = {
+                open: vi.fn().mockImplementation(() => {
+                    queueMicrotask(() => openReq.onsuccess?.({ target: openReq } as any));
+                    return openReq;
+                }),
+            };
+            Object.defineProperty(globalThis, 'indexedDB', {
+                value: idbMock,
+                writable: true,
+                configurable: true,
+            });
+            vi.resetModules();
+            const { PolyfeaServiceWorker } = await import('../src/polyfea-sw');
+            const scope = makeScopeMock();
+            const sw = new PolyfeaServiceWorker(scope as unknown as ServiceWorkerGlobalScope);
+            await expect((sw as any).setStoredConfig({ routes: [] })).rejects.toBeDefined();
         });
     });
 });
